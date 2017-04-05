@@ -1,14 +1,17 @@
 #include <stdio.h>
-#include </usr/include/mpi/mpi.h>
+#include <mpi.h>
 #include <math.h>
 #include <stdlib.h>
 #define PRECISION 0.000001
-#define RANGESIZE 1
+#define RANGESIZE 0.02
 #define DATA 0
 #define RESULT 1
 #define FINISH 2
 #define MAX 5
 #define DEBUG
+
+//mpicc lab2_custom.c -lm
+//tme mpirun -np 4 ./a.out
 
 struct Pair {
     double a;
@@ -70,11 +73,12 @@ double SimpleIntegration(double a,double b) {
 }
 
 int main(int argc, char **argv) {
+    //requests sprawdza wykonanie
     MPI_Request *requests;
     int requestcount=0;
     int requestcompleted;
     int myrank,proccount;
-    double a=1,b=100;
+    double a=0,b=4*M_PI;
     double *ranges;
     double range[2];
     double result=0;
@@ -126,6 +130,7 @@ int main(int argc, char **argv) {
         range[0]=a;
         // first distribute some ranges to all slaves
         for(i=1;i<proccount;i++) {
+            //wysij range o roznicy 5s
             range[1]=range[0]+(MAX*RANGESIZE);
 #ifdef DEBUG
             printf("\nMaster sending range %f,%f to process %d",range[0],range[1],i);
@@ -142,20 +147,7 @@ int main(int argc, char **argv) {
         // start receiving for results from the slaves
         for(i=1;i<proccount;i++)
             MPI_Irecv(&(resulttemp[i- 1]),1,MPI_DOUBLE,i,RESULT,MPI_COMM_WORLD,&(requests[i-1]));
-        // start sending new data parts to the slaves
-//        for(i=1;i<proccount;i++) {
-//            range[1] = range[0] + RANGESIZE;
-//#ifdef DEBUG
-//            printf("\nMaster sending range %f,%f to process %d", range[0], range[1], i);
-//            fflush(stdout);
-//#endif
-//            ranges[2 * i - 2] = range[0];
-//            ranges[2 * i - 1] = range[1];
-//            // send it to process i
-//            MPI_Isend(&(ranges[2 * i - 2]), 2, MPI_DOUBLE, i, DATA, MPI_COMM_WORLD, &(requests[proccount - 2 + i]));
-//            sentcount++;
-//            range[0] = range[1];
-//        }
+
 
         while (range[1]<b) {
 #ifdef DEBUG
@@ -221,7 +213,7 @@ int main(int argc, char **argv) {
 // now receive results for the initial sends
         for(i=0;i<4*(proccount-1);i++) {
 #ifdef DEBUG
-            printf("\nMaster receiving result from process %d",i%(proccount-1+1);
+            printf("\nMaster receiving result from process %d",i%(proccount-1+1));
             fflush(stdout);
 #endif
             MPI_Recv(&(resulttemp[i%(proccount-1)]),1,MPI_DOUBLE,(i%(proccount-1))+1,RESULT,MPI_COMM_WORLD,&status);
@@ -256,7 +248,7 @@ int main(int argc, char **argv) {
         }
 // first receive the initial data
         MPI_Recv(range,2,MPI_DOUBLE,0,DATA,MPI_COMM_WORLD,&status);
-
+        // dzielimy na 5 rangeow
         for (i = 0; i < MAX; i++) {
             data.a = range[0];
             range[0] += RANGESIZE;
@@ -267,21 +259,28 @@ int main(int argc, char **argv) {
             fflush(stdout);
 #endif
         }
+        //asynchroniczne odebranie rangey
         MPI_Irecv(ranges, 2, MPI_DOUBLE, 0, DATA, MPI_COMM_WORLD, &(requests[0]));
+        //dopoki nie jest skonczony lub pusty
         while (!(finish && isEmpty())) {
+            //jezeli nie jest pusty to pobiera dane ktore beda wyslane
             if (!isEmpty()) {
                 data = removeData();
                 //wait until old send was completed
+                
                 MPI_Wait(&(requests[1]), MPI_STATUS_IGNORE);
+                //oblicz range
                 resulttemp[0] = SimpleIntegration(data.a, data.b);
 #ifdef DEBUG
                 printf("\nSlave just computed range %f,%f  %f", data.a, data.b, resulttemp[0]);
                 fflush(stdout);
-#endif
+#endif          
+                //wyslij obliczony range
                 MPI_Isend(&resulttemp[0],1,MPI_DOUBLE,0,RESULT,MPI_COMM_WORLD,&(requests[1]));
             }
-
+            //jesli nie jest pelny
             if (!isFull()) {
+                //sprawdz czy poprzedni , update range jezeli poprzedni jest wykonany
                 MPI_Test(&(requests[0]), &flag, MPI_STATUS_IGNORE);
                 if (flag) {
                     data.a = ranges[0];
@@ -291,46 +290,22 @@ int main(int argc, char **argv) {
                     printf("\nSlave just received range %f,%f  %d", data.a, data.b, myrank);
                     fflush(stdout);
 #endif
-
+                    //poza zakresem
                     if (data.a == data.b) {
                         finish = 1;
                     } else {
+                        //wloz na koniec kolejki
                         insert(data);
                     }
-
+                    
                     if (!finish) {
+                        //wyslij range jezeli nie skonczono
                         MPI_Irecv(ranges, 2, MPI_DOUBLE, 0, DATA, MPI_COMM_WORLD, &(requests[0]));
                     }
                 }
             }
         }
 
-//        while (range[0]<range[1]) { // if there is some data to process
-//// before computing the next part start receiving a new data part
-//            MPI_Irecv(ranges,2,MPI_DOUBLE,0,DATA,MPI_COMM_WORLD,&(requests[0]));
-//// compute my part
-//            resulttemp[1]=SimpleIntegration(range[0],range[1]);
-//#ifdef DEBUG
-//            printf("\nSlave just computed range %f,%f",range[0],range[1]);
-//            fflush(stdout);
-//#endif
-//// now finish receiving the new part
-//// and finish sending the previous results back to the master
-//            MPI_Waitall(2,requests,MPI_STATUSES_IGNORE);
-//#ifdef DEBUG
-//            printf("\nSlave just received range %f,%f",ranges[0],ranges[1]);
-//            fflush(stdout);
-//#endif
-//            range[0]=ranges[0];
-//            range[1]=ranges[1];
-//            resulttemp[0]=resulttemp[1];
-//// and start sending the results back
-//            MPI_Isend(&resulttemp[0],1,MPI_DOUBLE,0,RESULT,MPI_COMM_WORLD,&(requests[1]));
-//#ifdef DEBUG
-//            printf("\nSlave just initiated send to master with result %f",resulttemp[0]);
-//            fflush(stdout);
-//#endif
-//        }
 // now finish sending the last results to the master
         MPI_Wait(&(requests[1]),MPI_STATUS_IGNORE);
     }
